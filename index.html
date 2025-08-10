@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Hallucination Tracker — Client-Side Benchmark</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root{
+      --bg0: #1a0f0f;
+      --bg1: #2a1a1a;
+      --ink: #fdf2f2;
+      --glow1: 255, 196, 182;
+      --glow2: 255, 120, 120;
+      --glow3: 255, 215, 140;
+    }
+    html, body { height: 100%; }
+    body {
+      color: var(--ink);
+      background: radial-gradient(1200px 800px at 10% -10%, rgba(var(--glow1),0.10), transparent 50%),
+                  radial-gradient(1000px 700px at 90% 10%, rgba(var(--glow2),0.10), transparent 50%),
+                  radial-gradient(900px 600px at 50% 120%, rgba(var(--glow3),0.08), transparent 60%),
+                  linear-gradient(180deg, var(--bg0) 0%, var(--bg1) 100%);
+      position: relative;
+      overflow-x: hidden;
+    }
+    body::after{
+      content:"";
+      position: fixed; inset: 0; pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+      background-size: 48px 48px, 48px 48px;
+      mask-image: radial-gradient(ellipse at 50% 40%, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.6) 50%, rgba(0,0,0,0) 85%);
+      animation: gridDrift 30s linear infinite;
+    }
+
+    /* Floating ember particles */
+    @keyframes floatUp {
+      0% { transform: translateY(0) scale(0.5); opacity: 0; }
+      10% { opacity: 1; }
+      100% { transform: translateY(-100vh) scale(1); opacity: 0; }
+    }
+    .ember {
+      position: fixed;
+      bottom: -10px;
+      background: radial-gradient(circle, rgba(var(--glow3),1) 0%, rgba(var(--glow2),0.8) 40%, transparent 70%);
+      border-radius: 50%;
+      animation: floatUp linear infinite;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    @keyframes gridDrift { to { transform: translateY(48px); } }
+
+    .card {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+      backdrop-filter: blur(8px);
+      transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+    }
+    .card:hover{ transform: translateY(-2px); box-shadow: 0 16px 40px rgba(0,0,0,0.35); background: rgba(255,255,255,0.08); }
+
+    code { background: rgba(255,255,255,0.10); padding: 2px 6px; border-radius: 6px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+    h1, h2 { position: relative; }
+    h1 { background: linear-gradient(90deg, rgba(var(--glow2),0.95), rgba(var(--glow3),0.95)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  </style>
+</head>
+<body class="text-slate-100 min-h-screen">
+  <!-- Ember particles -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      for (let i = 0; i < 28; i++) {
+        const ember = document.createElement('div');
+        ember.className = 'ember';
+        const size = Math.random() * 6 + 4;
+        ember.style.width = size + 'px';
+        ember.style.height = size + 'px';
+        ember.style.left = Math.random() * 100 + 'vw';
+        ember.style.animationDuration = (Math.random() * 15 + 10) + 's';
+        ember.style.animationDelay = (Math.random() * 10) + 's';
+        document.body.appendChild(ember);
+      }
+    });
+  </script>
+
+  <header class="max-w-6xl mx-auto px-4 pt-8">
+    <div class="flex items-center justify-between gap-4">
+      <h1 class="text-2xl md:text-3xl font-semibold">AI Hallucination Tracker</h1>
+      <a href="https://github.com/new" target="_blank" class="hidden md:inline-flex text-sm px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500">Fork / Deploy</a>
+    </div>
+    <p class="mt-2 text-slate-200">Client-side evaluation harness for LLM factual accuracy. Upload a <strong>ground-truth dataset</strong> and one or more <strong>model outputs</strong>, then get a leaderboard and error buckets. No servers, no API keys.</p>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 pb-20">
+    <section class="mt-8 grid lg:grid-cols-2 gap-6">
+      <div class="card p-5">
+        <h2 class="text-lg font-semibold mb-3">1) Ground-truth dataset (CSV)</h2>
+        <p class="text-sm text-slate-300 mb-3">Format: <code>id,question,answer</code>. IDs must be unique.</p>
+        <input id="gtFile" type="file" accept=".csv" class="block w-full text-sm text-slate-100 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-slate-700 file:text-slate-100 hover:file:bg-slate-600" />
+        <div id="gtStatus" class="text-xs text-slate-400 mt-2"></div>
+        <button id="downloadGtTemplate" class="mt-3 px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-sm">Download template</button>
+      </div>
+
+      <div class="card p-5">
+        <h2 class="text-lg font-semibold mb-3">2) Model outputs (CSV, multi-model)</h2>
+        <p class="text-sm text-slate-300 mb-3">Format: <code>id,model,output</code>. Multiple rows per model allowed. IDs must match the ground truth.</p>
+        <input id="predFile" type="file" accept=".csv" class="block w-full text-sm text-slate-100 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-slate-700 file:text-slate-100 hover:file:bg-slate-600" />
+        <div id="predStatus" class="text-xs text-slate-400 mt-2"></div>
+        <button id="downloadPredTemplate" class="mt-3 px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-sm">Download template</button>
+      </div>
+
+      <div class="card p-5">
+        <h2 class="text-lg font-semibold mb-3">3) Scoring configuration</h2>
+        <div class="grid sm:grid-cols-2 gap-4">
+          <label class="block">
+            <span class="text-sm text-slate-200">Lowercase & strip punctuation</span>
+            <select id="normalize" class="mt-1 w-full rounded-xl bg-white/5 px-3 py-2">
+              <option value="1" selected>Yes</option>
+              <option value="0">No</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-sm text-slate-200">Stopwords (en)</span>
+            <select id="stopwords" class="mt-1 w-full rounded-xl bg-white/5 px-3 py-2">
+              <option value="1" selected>Remove</option>
+              <option value="0">Keep</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-sm text-slate-200">Exact-match weight</span>
+            <input id="wEM" type="number" step="0.1" value="0.4" class="mt-1 w-full rounded-xl bg-white/5 px-3 py-2" />
+          </label>
+          <label class="block">
+            <span class="text-sm text-slate-200">Token-F1 weight</span>
+            <input id="wF1" type="number" step="0.1" value="0.3" class="mt-1 w-full rounded-xl bg-white/5 px-3 py-2" />
+          </label>
+          <label class="block">
+            <span class="text-sm text-slate-200">ROUGE-L weight</span>
+            <input id="wRouge" type="number" step="0.1" value="0.3" class="mt-1 w-full rounded-xl bg-white/5 px-3 py-2" />
+          </label>
+          <label class="block">
+            <span class="text-sm text-slate-200">Hallucination threshold</span>
+            <input id="hallThresh" type="number" step="0.01" value="0.5" class="mt-1 w-full rounded-xl bg-white/5 px-3 py-2" />
+            <p class="text-xs text-slate-400 mt-1">Composite score &lt; threshold ⇒ flag as hallucination.</p>
+          </label>
+        </div>
+        <div class="mt-4 flex gap-3">
+          <button id="runBtn" class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500">Run evaluation</button>
+          <button id="exportBtn" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600">Export results (CSV)</button>
+        </div>
+        <div id="status" class="text-xs text-slate-400 mt-2"></div>
+      </div>
+
+      <div class="card p-5">
+        <h2 class="text-lg font-semibold mb-3">Methodology (quick)</h2>
+        <ul class="text-sm text-slate-200 list-disc list-inside space-y-1">
+          <li><strong>Exact match (EM):</strong> 1.0 if normalized strings are identical, else 0.</li>
+          <li><strong>Token-F1:</strong> 2·(P·R)/(P+R) over unigram sets.</li>
+          <li><strong>ROUGE-L:</strong> Longest common subsequence similarity.</li>
+          <li><strong>Composite:</strong> w<sub>EM</sub>·EM + w<sub>F1</sub>·F1 + w<sub>R</sub>·ROUGE-L.</li>
+          <li><strong>Hallucination flag:</strong> composite &lt; threshold and output length ≥ 16 tokens.</li>
+        </ul>
+        <p class="text-xs text-slate-400 mt-2">Everything runs locally in your browser.</p>
+      </div>
+    </section>
+
+    <section class="mt-8 grid lg:grid-cols-3 gap-6">
+      <div class="card p-5 lg:col-span-2">
+        <h2 class="text-lg font-semibold mb-3">Leaderboard</h2>
+        <div class="overflow-x-auto">
+          <table id="leaderboard" class="w-full text-sm">
+            <thead class="text-slate-200">
+              <tr class="text-left border-b border-white/10">
+                <th class="py-2 pr-4">Model</th>
+                <th class="py-2 pr-4">Items</th>
+                <th class="py-2 pr-4">EM</th>
+                <th class="py-2 pr-4">F1</th>
+                <th class="py-2 pr-4">ROUGE-L</th>
+                <th class="py-2 pr-4">Composite</th>
+                <th class="py-2 pr-4">Hallucination %</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-white/10" id="leaderBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card p-5">
+        <h2 class="text-lg font-semibold mb-3">Error buckets</h2>
+        <ul id="buckets" class="text-sm text-slate-200 space-y-2"></ul>
+      </div>
+    </section>
+
+    <section class="mt-8 card p-5">
+      <h2 class="text-lg font-semibold mb-3">Row-level explorer</h2>
+      <div class="text-sm text-slate-200 mb-2">Click a model in the leaderboard to drill in.</div>
+      <div id="rows" class="space-y-3"></div>
+    </section>
+
+    <section class="mt-8 card p-5">
+      <h3 class="text-base font-semibold mb-2">Docs</h3>
+      <ol class="text-sm text-slate-200 list-decimal list-inside space-y-1">
+        <li>Export your QA dataset as CSV with <code>id,question,answer</code>.</li>
+        <li>Collect model outputs as CSV with <code>id,model,output</code>.</li>
+        <li>Upload both, tune weights, click <strong>Run evaluation</strong>.</li>
+        <li>Review leaderboard, error buckets, and row-level diffs. Export CSV.</li>
+      </ol>
+    </section>
+  </main>
+
+  <script>
+    // --- Utilities ---
+    function csvParse(text) {
+      const rows = []; let i=0, cur='', inQ=false, row=[];
+      while (i<text.length) {
+        const c=text[i];
+        if (c=='"') { if (inQ && text[i+1]=='"') { cur+='"'; i++; } else { inQ=!inQ; } }
+        else if (c===',' && !inQ) { row.push(cur); cur=''; }
+        else if ((c==='\n' || c==='\r') && !inQ) { if (cur!=='' || row.length>0) { row.push(cur); rows.push(row); row=[]; cur=''; } }
+        else { cur+=c; }
+        i++;
+      }
+      if (cur!=='' || row.length>0) { row.push(cur); rows.push(row); }
+      return rows.filter(r=>r.length && r.some(x=>x.trim()!==''));
+    }
+
+    const STOPWORDS = new Set("a,an,the,of,in,on,for,to,with,and,or,by,is,are,was,were,be,as,at,from,that,this,these,those,it,its,into,about,over,under,than,then,there,their,has,have,had,not,no,yes,do,does,did,can,could,should,would,may,might,will,shall,you,your,we,our,they,them,he,she,his,her,which,who,whom,what,when,where,why,how".split(','));
+
+    function normalizeText(s, doNorm=true, rmStop=true) {
+      if (!s) return {text:'', tokens:[]};
+      let t = s;
+      if (doNorm) t = t.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ');
+      let toks = t.split(/\s+/).filter(Boolean);
+      if (rmStop) toks = toks.filter(w=>!STOPWORDS.has(w));
+      return { text: t.trim(), tokens: toks };
+    }
+
+    function exactMatch(a,b){ return a.trim()!=='' && a===b ? 1:0; }
+
+    function tokenF1(predTokens, refTokens){
+      const refCounts = new Map(); refTokens.forEach(w=>refCounts.set(w,(refCounts.get(w)||0)+1));
+      let overlap=0; const seen = new Map();
+      predTokens.forEach(w=>{
+        const used = seen.get(w)||0; const avail = refCounts.get(w)||0;
+        if (used < avail) { overlap++; seen.set(w, used+1); }
+      });
+      const prec = predTokens.length? overlap/predTokens.length: 0;
+      const rec  = refTokens.length? overlap/refTokens.length: 0;
+      return (prec+rec) ? 2*prec*rec/(prec+rec) : 0;
+    }
+
+    function lcsLen(a,b){
+      const m=a.length, n=b.length; const dp=Array(m+1).fill(0).map(()=>Array(n+1).fill(0));
+      for(let i=1;i<=m;i++){
+        for(let j=1;j<=n;j++){
+          if(a[i-1]===b[j-1]) dp[i][j]=dp[i-1][j-1]+1; else dp[i][j]=Math.max(dp[i-1][j],dp[i][j-1]);
+        }
+      }
+      return dp[m][n];
+    }
+    function rougeL(predTokens, refTokens){
+      if (!predTokens.length || !refTokens.length) return 0;
+      const lcs = lcsLen(predTokens, refTokens);
+      const prec = lcs / predTokens.length;
+      const rec  = lcs / refTokens.length;
+      return (prec+rec) ? (2*prec*rec)/(prec+rec) : 0;
+    }
+
+    function compositeScore(em,f1,rg,wEM,wF1,wR){
+      return wEM*em + wF1*f1 + wR*rg;
+    }
+
+    // --- State ---
+    let GT = new Map(); // id -> {question, answer, norm}
+    let PRED = [];      // {id, model, output, norm}
+
+    function updateStatus(elId, msg){ document.getElementById(elId).textContent = msg; }
+
+    function downloadCSV(name, rows){
+      const csv = rows.map(r=> r.map(x=>{
+        const s = (x==null? '': String(x));
+        return (s.includes(',')||s.includes('"')||s.includes('\n')) ? '"'+s.replace(/"/g,'""')+'"' : s;
+      }).join(',')).join('\n');
+      const blob = new Blob([csv], {type:'text/csv'});
+      const url = URL.createObjectURL(blob); const a=document.createElement('a');
+      a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url);
+    }
+
+    // Templates
+    document.getElementById('downloadGtTemplate').onclick = ()=>{
+      downloadCSV('ground_truth_template.csv', [
+        ['id','question','answer'],
+        ['q1','What is the capital of France?','Paris'],
+        ['q2','Who wrote "Pride and Prejudice"?','Jane Austen']
+      ]);
+    }
+    document.getElementById('downloadPredTemplate').onclick = ()=>{
+      downloadCSV('predictions_template.csv', [
+        ['id','model','output'],
+        ['q1','ModelA','Paris'],
+        ['q1','ModelB','The capital is Lyon'],
+        ['q2','ModelA','Jane Austen'],
+        ['q2','ModelB','It was written by Emily Brontë']
+      ]);
+    }
+
+    // File loaders
+    document.getElementById('gtFile').addEventListener('change', async (e)=>{
+      const f = e.target.files[0]; if (!f) return;
+      const text = await f.text(); const rows = csvParse(text);
+      const header = rows[0].map(s=>s.trim().toLowerCase());
+      const iId = header.indexOf('id'), iQ=header.indexOf('question'), iA=header.indexOf('answer');
+      if (iId<0 || iQ<0 || iA<0) { updateStatus('gtStatus','Invalid header. Expect id,question,answer'); return; }
+      GT = new Map();
+      const doNorm = document.getElementById('normalize').value==='1';
+      const rmStop = document.getElementById('stopwords').value==='1';
+      for (let r=1; r<rows.length; r++){
+        const id = rows[r][iId]?.trim(); if (!id) continue;
+        const q = rows[r][iQ]||''; const a = rows[r][iA]||'';
+        const norm = normalizeText(a, doNorm, rmStop);
+        GT.set(id, { question:q, answer:a, norm });
+      }
+      updateStatus('gtStatus', `Loaded ${GT.size} items.`);
+    });
+
+    document.getElementById('predFile').addEventListener('change', async (e)=>{
+      const f = e.target.files[0]; if (!f) return;
+      const text = await f.text(); const rows = csvParse(text);
+      const header = rows[0].map(s=>s.trim().toLowerCase());
+      const iId = header.indexOf('id'), iM=header.indexOf('model'), iO=header.indexOf('output');
+      if (iId<0 || iM<0 || iO<0) { updateStatus('predStatus','Invalid header. Expect id,model,output'); return; }
+      PRED = [];
+      const doNorm = document.getElementById('normalize')..value==='1';
+      const rmStop = document.getElementById('stopwords').value==='1';
+      for (let r=1; r<rows.length; r++){
+        const id = rows[r][iId]?.trim(); const model = rows[r][iM]?.trim(); const out = rows[r][iO]||'';
+        if (!id || !model) continue;
+        const norm = normalizeText(out, doNorm, rmStop);
+        PRED.push({ id, model, output: out, norm });
+      }
+      updateStatus('predStatus', `Loaded ${PRED.length} predictions.`);
+    });
+
+    // Evaluation
+    document.getElementById('runBtn').addEventListener('click', ()=>{
+      const doNorm = document.getElementById('normalize').value==='1';
+      const rmStop = document.getElementById('stopwords').value==='1';
+      const wEM = parseFloat(document.getElementById('wEM').value)||0.4;
+      const wF1 = parseFloat(document.getElementById('wF1').value)||0.3;
+      const wR  = parseFloat(document.getElementById('wRouge').value)||0.3;
+      const hallT = parseFloat(document.getElementById('hallThresh').value)||0.5;
+
+      if (!GT.size || !PRED.length) { document.getElementById('status').textContent = 'Upload both files first.'; return; }
+
+      const perModel = new Map();
+      const rowScores = [];
+      for (const p of PRED){
+        const g = GT.get(p.id);
+        if (!g) continue;
+        const predN = normalizeText(p.output, doNorm, rmStop);
+        const em = exactMatch(predN.text, g.norm.text);
+        const f1 = tokenF1(predN.tokens, g.norm.tokens);
+        const rg = rougeL(predN.tokens, g.norm.tokens);
+        const comp = compositeScore(em,f1,rg,wEM,wF1,wR);
+        const halluc = (comp < hallT && predN.tokens.length >= 16) ? 1:0;
+        const rec = { id:p.id, model:p.model, em, f1, rg, comp, halluc, question:g.question, answer:g.answer, output:p.output };
+        rowScores.push(rec);
+        if (!perModel.has(p.model)) perModel.set(p.model, []);
+        perModel.get(p.model).push(rec);
+      }
+
+      const leaderboard = [];
+      for (const [model, arr] of perModel.entries()){
+        const n = arr.length;
+        const avg = (k)=> arr.reduce((s,x)=>s+x[k],0)/n;
+        leaderboard.push({
+          model,
+          items:n,
+          EM: avg('em'),
+          F1: avg('f1'),
+          RougeL: avg('rg'),
+          Composite: avg('comp'),
+          HallPct: 100*arr.reduce((s,x)=>s+x.halluc,0)/n
+        });
+      }
+      leaderboard.sort((a,b)=> b.Composite - a.Composite);
+
+      const lb = document.getElementById('leaderBody'); lb.innerHTML='';
+      for (const row of leaderboard){
+        const tr = document.createElement('tr'); tr.className='hover:bg-white/5 cursor-pointer';
+        tr.innerHTML = `
+          <td class="py-2 pr-4">${row.model}</td>
+          <td class="py-2 pr-4">${row.items}</td>
+          <td class="py-2 pr-4">${row.EM.toFixed(2)}</td>
+          <td class="py-2 pr-4">${row.F1.toFixed(2)}</td>
+          <td class="py-2 pr-4">${row.RougeL.toFixed(2)}</td>
+          <td class="py-2 pr-4 font-semibold">${row.Composite.toFixed(2)}</td>
+          <td class="py-2 pr-4 ${row.HallPct>0? 'text-rose-300':'text-slate-200'}">${row.HallPct.toFixed(1)}%</td>`;
+        tr.addEventListener('click', ()=> showRows(row.model, perModel.get(row.model)) );
+        lb.appendChild(tr);
+      }
+
+      const buckets = {
+        exact_match: rowScores.filter(r=>r.em===1).length,
+        near_miss: rowScores.filter(r=>r.em===0 && r.comp>=0.7).length,
+        partial: rowScores.filter(r=>r.comp>=0.4 && r.comp<0.7).length,
+        hallucination: rowScores.filter(r=>r.halluc===1).length,
+        empty: rowScores.filter(r=>!r.output || !r.output.trim()).length,
+      };
+      const bEl = document.getElementById('buckets'); bEl.innerHTML = '';
+      Object.entries(buckets).forEach(([k,v])=>{
+        const li = document.createElement('li'); li.textContent = `${k.replace('_',' ')}: ${v}`; bEl.appendChild(li);
+      });
+
+      window._rowScores = rowScores;
+      document.getElementById('status').textContent = `Evaluated ${rowScores.length} predictions across ${leaderboard.length} model(s).`;
+    });
+
+    function showRows(model, rows){
+      const c = document.getElementById('rows'); c.innerHTML='';
+      for (const r of rows){
+        const div = document.createElement('div');
+        div.className = 'rounded-xl border border-white/10 p-3';
+        div.innerHTML = `
+          <div class="text-xs text-slate-400">#${r.id} · <span class="mono">${model}</span> · EM ${r.em.toFixed(2)} · F1 ${r.f1.toFixed(2)} · ROUGE-L ${r.rg.toFixed(2)} · Score <strong>${r.comp.toFixed(2)}</strong> ${r.halluc? '<span class="text-rose-300">· HALLUCINATION</span>':''}</div>
+          <div class="mt-1"><span class="text-slate-400 text-xs">Q:</span> ${escapeHtml(r.question)}</div>
+          <div class="mt-1"><span class="text-slate-400 text-xs">Ref:</span> ${escapeHtml(r.answer)}</div>
+          <div class="mt-1"><span class="text-slate-400 text-xs">Out:</span> ${escapeHtml(r.output)}</div>
+        `;
+        c.appendChild(div);
+      }
+    }
+
+    function escapeHtml(s){
+      return String(s||'').replace(/[&<>'"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;' }[c]));
+    }
+
+    document.getElementById('exportBtn').addEventListener('click', ()=>{
+      const rows = (window._rowScores||[]).map(r=>[
+        r.id, r.model, r.em.toFixed(2), r.f1.toFixed(2), r.rg.toFixed(2), r.comp.toFixed(2), r.halluc, r.question, r.answer, r.output
+      ]);
+      rows.unshift(['id','model','EM','F1','ROUGE_L','Composite','Hallucination','question','answer','output']);
+      downloadCSV('hallucination_results.csv', rows);
+    });
+  </script>
+</body>
+</html>
